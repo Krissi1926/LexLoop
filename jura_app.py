@@ -5,84 +5,76 @@ import random
 # === 1. Setup ===
 st.set_page_config(page_title="Jura Lernapp", page_icon="§")
 
-if 'score' not in st.session_state:
-    st.session_state.score = 0
-if 'beantwortet' not in st.session_state:
-    st.session_state.beantwortet = 0
+# Session State
+if 'score' not in st.session_state: st.session_state.score = 0
+if 'beantwortet' not in st.session_state: st.session_state.beantwortet = 0
 
-# === 2. Funktionen ===
+# === 2. Robuste Lade-Funktion ===
 def lade_daten(upload):
     try:
-        # Wir lesen jetzt auch die Spalte 'fach' mit aus (falls vorhanden)
-        df = pd.read_csv(upload, sep=";")
+        # Trick: Wir lassen Python das Trennzeichen raten (sep=None)
+        df = pd.read_csv(upload, sep=None, engine='python')
+        
+        # Wir machen alle Spaltennamen klein (Frage -> frage), damit Schreibfehler egal sind
+        df.columns = [c.lower() for c in df.columns]
         return df
-    except:
-        return pd.DataFrame() # Leere Tabelle zurückgeben bei Fehler
+    except Exception as e:
+        st.error(f"Fehler beim Lesen: {e}")
+        return pd.DataFrame()
 
 def naechste_karte():
     st.session_state.index += 1
     st.session_state.zeige_loesung = False
-    
-    # Wenn wir am Ende des aktuellen Stapels sind
     if st.session_state.index >= len(st.session_state.lernstapel):
         st.session_state.index = 0
         random.shuffle(st.session_state.lernstapel)
-        st.toast("Alle Karten dieses Fachs gelernt! Von vorne...", icon="🔄")
+        st.toast("Stapel neu gemischt!", icon="🔄")
 
-# === 3. Seitenleiste & Filter ===
+# === 3. Seitenleiste ===
 with st.sidebar:
     st.header("⚙️ Einstellungen")
-    
-    # Datei Logik
     uploaded_file = st.file_uploader("📂 Fragen hochladen", type="csv")
     datei = uploaded_file if uploaded_file else "fragen.csv"
     
-    # Daten laden (als Tabelle/DataFrame)
     df_alle = lade_daten(datei)
     
     if df_alle.empty:
-        st.error("Keine Daten gefunden. Bitte CSV prüfen.")
+        st.warning("Warte auf Datei...")
         st.stop()
-    
-    # --- DER NEUE FILTER ---
-    # Wir schauen, ob es eine Spalte "fach" gibt
-    if 'fach' in df_alle.columns:
-        # Wir suchen alle einzigartigen Fächer (z.B. Strafrecht, Zivilrecht)
-        verfuegbare_faecher = list(df_alle['fach'].unique())
-        # Wir fügen eine Option "Alle" hinzu
-        auswahl = st.multiselect("📚 Fach auswählen:", verfuegbare_faecher, default=verfuegbare_faecher)
         
-        # Wir filtern die Tabelle: Nur Zeilen behalten, wo das Fach in der Auswahl ist
-        df_gefiltert = df_alle[df_alle['fach'].isin(auswahl)]
+    # Filter-Logik (Robust)
+    # Wir schauen, ob irgendeine Spalte so ähnlich wie "fach" oder "gebiet" heißt
+    fach_col = None
+    for col in df_alle.columns:
+        if "fach" in col or "gebiet" in col:
+            fach_col = col
+            break
+            
+    if fach_col:
+        faecher = list(df_alle[fach_col].unique())
+        auswahl = st.multiselect("📚 Fach auswählen:", faecher, default=faecher)
+        df_gefiltert = df_alle[df_alle[fach_col].isin(auswahl)]
     else:
-        st.info("Tipp: Füge eine Spalte 'fach' in deine CSV ein, um zu filtern!")
+        st.info("Keine Spalte 'fach' gefunden - zeige alle Fragen.")
         df_gefiltert = df_alle
 
-    # Score
+    # Score Reset
     st.write("---")
-    st.subheader("📊 Statistik")
-    if st.session_state.beantwortet > 0:
-        quote = (st.session_state.score / st.session_state.beantwortet) * 100
-        st.metric("Quote", f"{int(quote)}%", f"{st.session_state.score} / {st.session_state.beantwortet} richtig")
-    
-    if st.button("🗑️ Reset Score"):
+    if st.button("🗑️ Score Reset"):
         st.session_state.score = 0
         st.session_state.beantwortet = 0
         st.rerun()
 
-# === 4. Hauptlogik ===
+# === 4. Hauptteil ===
 st.title("§ Jura-Trainer")
 
-# Wenn wir den Filter ändern, müssen wir den Lernstapel neu bauen
-# Wir machen das, indem wir prüfen, ob wir überhaupt Karten haben
 karten_liste = df_gefiltert.to_dict('records')
 
 if not karten_liste:
-    st.warning("Keine Karten für diese Auswahl gefunden!")
+    st.error("Keine Karten in der Auswahl.")
     st.stop()
 
-# Initialisierung oder Reset bei Filterwechsel
-# (Wir merken uns einfach die Länge der Liste, um Änderungen zu erkennen)
+# Initialisierung bei Änderungen
 if 'letzte_karten_anzahl' not in st.session_state or st.session_state.letzte_karten_anzahl != len(karten_liste):
     random.shuffle(karten_liste)
     st.session_state.lernstapel = karten_liste
@@ -94,16 +86,19 @@ if 'letzte_karten_anzahl' not in st.session_state or st.session_state.letzte_kar
 karte = st.session_state.lernstapel[st.session_state.index]
 
 # Fortschritt
-fortschritt = (st.session_state.index) / len(st.session_state.lernstapel)
-st.progress(fortschritt)
+st.progress((st.session_state.index) / len(st.session_state.lernstapel))
 
-# Fach Badge anzeigen (falls vorhanden)
-if 'fach' in karte:
-    st.caption(f"Fachgebiet: {karte['fach']}")
-
-# Karte anzeigen
+# Anzeige
 with st.container(border=True):
-    st.markdown(f"### {karte.get('frage', 'Fehler')}")
+    # Falls Spaltennamen komisch sind, suchen wir die passenden
+    frage_key = next((k for k in karte.keys() if 'frag' in k), None)
+    antwort_key = next((k for k in karte.keys() if 'antw' in k), None)
+    
+    if not frage_key or not antwort_key:
+        st.error(f"Konnte Spalten 'frage' und 'antwort' nicht finden. Deine Spalten heißen: {list(karte.keys())}")
+        st.stop()
+
+    st.markdown(f"### {karte[frage_key]}")
     st.write("")
 
     if not st.session_state.zeige_loesung:
@@ -111,13 +106,11 @@ with st.container(border=True):
             st.session_state.zeige_loesung = True
             st.rerun()
     else:
-        st.info(f"💡 **Antwort:** {karte.get('antwort', 'Fehler')}")
+        st.info(f"💡 {karte[antwort_key]}")
         st.write("---")
-        
         c1, c2 = st.columns(2)
         with c1:
             if st.button("❌ Wiederholen", use_container_width=True):
-                st.session_state.beantwortet += 1
                 naechste_karte()
                 st.rerun()
         with c2:
